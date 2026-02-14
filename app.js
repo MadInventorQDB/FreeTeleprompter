@@ -34,6 +34,12 @@ const defaultState = {
 let state = hydrateState();
 let raf = null;
 let lastFrame = performance.now();
+const dragScroll = {
+  active: false,
+  pointerId: null,
+  startY: 0,
+  startOffset: 0,
+};
 
 function hydrateState() {
   const global = readStorage('ft-global') || {};
@@ -328,10 +334,46 @@ function render() {
   if (view === 'operator') renderOperator();
   if (view === 'prompter') renderPrompter(true);
   if (view === 'remote') renderRemote();
+  bindDragScroll();
   applyVars();
   applyOffset();
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+}
+
+function bindDragScroll() {
+  const prompterRoot = document.getElementById('prompterRoot');
+  if (!prompterRoot) return;
+
+  prompterRoot.onpointerdown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    dragScroll.active = true;
+    dragScroll.pointerId = event.pointerId;
+    dragScroll.startY = event.clientY;
+    dragScroll.startOffset = state.offset;
+    prompterRoot.classList.add('dragging');
+    prompterRoot.setPointerCapture?.(event.pointerId);
+    setState({ isPlaying: false });
+  };
+
+  prompterRoot.onpointermove = (event) => {
+    if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
+    const deltaY = event.clientY - dragScroll.startY;
+    state.offset = dragScroll.startOffset + deltaY;
+    applyOffset();
+    saveState();
+    channel.postMessage({ type: 'state', payload: { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed } });
+  };
+
+  const stopDrag = (event) => {
+    if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
+    dragScroll.active = false;
+    dragScroll.pointerId = null;
+    prompterRoot.classList.remove('dragging');
+  };
+
+  prompterRoot.onpointerup = stopDrag;
+  prompterRoot.onpointercancel = stopDrag;
 }
 
 async function refreshGoogleDoc() {

@@ -68,7 +68,11 @@ textarea#scriptInput {
   background: var(--bg);
   color: var(--fg);
   overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
 }
+.prompter-shell.dragging { cursor: grabbing; }
 .clean-feed .operator-overlay { display: none; }
 .text-track {
   position: absolute;
