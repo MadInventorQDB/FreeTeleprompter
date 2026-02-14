@@ -25,8 +25,13 @@ A free browser-based teleprompter for phones, tablets, and computers.
 
 ## Run locally
 
+Use the bundled Node server so operator/remote stay synced across devices via the built-in sync relay endpoint.
+
 ```bash
-python3 -m http.server 4173
+npm install
+npm start
 ```
 
 Open `http://localhost:4173`.
+
+> If you use a plain static server (like `python -m http.server`), cross-device syncing will not work because there is no sync relay endpoint.

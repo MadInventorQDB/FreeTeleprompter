@@ -26,6 +26,11 @@ const SHARE_STATE_KEYS = [
   'googleDocUrl',
   'lastSyncedAt',
 ];
+const SHARE_CHANNEL = params.get('channel') || 'default';
+const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+let syncCursor = 0;
+let syncPolling = false;
+
 
 const defaultState = {
   scriptId: 'default',
@@ -105,7 +110,9 @@ function saveState() {
 }
 function emit() {
   saveState();
-  channel.postMessage({ type: 'state', payload: state });
+  const payload = pickShareState(state);
+  channel.postMessage({ type: 'state', payload, source: clientId });
+  pushSyncState(payload);
 }
 
 function pickShareState(source) {
@@ -134,7 +141,8 @@ function buildSharedStateQuery() {
     const data = pickShareState(state);
     const json = JSON.stringify(data);
     const bytes = new TextEncoder().encode(json);
-    const raw = String.fromCharCode(...bytes);
+    let raw = '';
+    bytes.forEach((byte) => { raw += String.fromCharCode(byte); });
     const encoded = btoa(raw);
     return `state=${encodeURIComponent(encoded)}`;
   } catch {
@@ -144,14 +152,64 @@ function buildSharedStateQuery() {
 
 function buildViewUrl(nextView) {
   const shared = buildSharedStateQuery();
-  const query = [`view=${encodeURIComponent(nextView)}`];
+  const query = [`view=${encodeURIComponent(nextView)}`, `channel=${encodeURIComponent(SHARE_CHANNEL)}`];
   if (shared) query.push(shared);
   return `${location.pathname}?${query.join('&')}`;
 }
+
+function connectSocket() {
+  if (syncPolling) return;
+  syncPolling = true;
+  pollSyncState();
+}
+
+async function pollSyncState() {
+  while (syncPolling) {
+    try {
+      const res = await fetch(`/sync/poll?channel=${encodeURIComponent(SHARE_CHANNEL)}&since=${syncCursor}`);
+      if (!res.ok) throw new Error('poll failed');
+      const data = await res.json();
+      syncCursor = Number(data.cursor || syncCursor);
+      (data.events || []).forEach((event) => {
+        if (event.source === clientId || event.type !== 'state') return;
+        applyIncomingState(event.payload);
+      });
+    } catch {
+      // ignore polling interruptions and retry
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+}
+
+async function pushSyncState(payload) {
+  try {
+    await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: SHARE_CHANNEL,
+        event: {
+          type: 'state',
+          source: clientId,
+          payload: pickShareState(payload),
+        },
+      }),
+    });
+  } catch {
+    // ignore sync push failures; local session still works
+  }
+}
+
+function applyIncomingState(next) {
+  state = { ...state, ...next };
+  saveState();
+  render();
+}
+
 channel.onmessage = (event) => {
-  if (event.data?.type === 'state') {
-    state = { ...state, ...event.data.payload };
-    render();
+  if (event.data?.type === 'state' && event.data?.source !== clientId) {
+    applyIncomingState(event.data.payload);
   }
 };
 window.addEventListener('storage', () => {
@@ -353,10 +411,32 @@ function renderRemote() {
   document.getElementById('rMarker').onclick = () => jumpMarker(1);
 }
 
-function setState(next) {
+function setState(next, options = {}) {
+  const { shouldRender = true, shouldEmit = true } = options;
   state = { ...state, ...next };
-  emit();
-  render();
+  if (shouldEmit) emit();
+  if (shouldRender) render();
+}
+
+function captureFocusState() {
+  if (view !== 'operator') return null;
+  const active = document.activeElement;
+  if (!active || !(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement)) return null;
+  return {
+    id: active.id,
+    start: active.selectionStart,
+    end: active.selectionEnd,
+  };
+}
+
+function restoreFocusState(snapshot) {
+  if (!snapshot?.id) return;
+  const el = document.getElementById(snapshot.id);
+  if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
+  el.focus();
+  if (typeof snapshot.start === 'number' && typeof snapshot.end === 'number' && 'setSelectionRange' in el) {
+    el.setSelectionRange(snapshot.start, snapshot.end);
+  }
 }
 
 function loop(now) {
@@ -365,8 +445,10 @@ function loop(now) {
   if (state.isPlaying) {
     state.offset -= state.speed * dt;
     applyOffset();
+    const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
     saveState();
-    channel.postMessage({ type: 'state', payload: { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed } });
+    channel.postMessage({ type: 'state', payload, source: clientId });
+    pushSyncState(payload);
   }
   raf = requestAnimationFrame(loop);
 }
@@ -397,6 +479,7 @@ function jumpMarker(dir) {
 }
 
 function render() {
+  const focusSnapshot = captureFocusState();
   if (view === 'operator') renderOperator();
   if (view === 'prompter') renderPrompter(true);
   if (view === 'remote') renderRemote();
@@ -405,6 +488,7 @@ function render() {
   applyOffset();
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+  restoreFocusState(focusSnapshot);
 }
 
 function bindDragScroll() {
@@ -427,8 +511,10 @@ function bindDragScroll() {
     const deltaY = event.clientY - dragScroll.startY;
     state.offset = dragScroll.startOffset + deltaY;
     applyOffset();
+    const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
     saveState();
-    channel.postMessage({ type: 'state', payload: { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed } });
+    channel.postMessage({ type: 'state', payload, source: clientId });
+    pushSyncState(payload);
   };
 
   const stopDrag = (event) => {
@@ -522,6 +608,7 @@ function escapeHTML(str) {
     .replaceAll("'", '&#039;');
 }
 
+connectSocket();
 render();
 raf = requestAnimationFrame(loop);
 window.addEventListener('beforeunload', () => cancelAnimationFrame(raf));
