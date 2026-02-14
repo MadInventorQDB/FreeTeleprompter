@@ -7,6 +7,7 @@ A free browser-based teleprompter for phones, tablets, and computers.
 - **Operator view** (default `/`): script editing, transport controls, styling, Google Doc refresh, and display tools.
 - **Prompter view** (`/?view=prompter`): clean full-screen talent-facing feed with optional mirror.
 - **Phone remote** (`/?view=remote`): touch-friendly transport and speed controls.
+  - To keep phone and operator script/settings in sync, open the remote from the operator's **Open Phone Remote** button so the current state is embedded in the link.
 
 ## Feature highlights
 

@@ -2,6 +2,30 @@ const params = new URLSearchParams(window.location.search);
 const view = params.get('view') || 'operator';
 const app = document.getElementById('app');
 const channel = new BroadcastChannel('free-teleprompter');
+const SHARE_STATE_KEYS = [
+  'scriptId',
+  'scriptText',
+  'isPlaying',
+  'speed',
+  'offset',
+  'mirrorPrompter',
+  'mirrorOperator',
+  'fontFamily',
+  'fontSize',
+  'lineHeight',
+  'paragraphSpacing',
+  'sideMargin',
+  'guideY',
+  'guideHeight',
+  'guideMode',
+  'bgColor',
+  'textColor',
+  'shadowEnabled',
+  'countdown',
+  'cleanFeed',
+  'googleDocUrl',
+  'lastSyncedAt',
+];
 
 const defaultState = {
   scriptId: 'default',
@@ -45,7 +69,8 @@ function hydrateState() {
   const global = readStorage('ft-global') || {};
   const scriptId = global.scriptId || 'default';
   const perScript = readStorage(`ft-script-${scriptId}`) || {};
-  return { ...defaultState, ...global, ...perScript, scriptId };
+  const sharedState = readSharedState();
+  return { ...defaultState, ...global, ...perScript, ...sharedState, scriptId: sharedState.scriptId || scriptId };
 }
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -81,6 +106,47 @@ function saveState() {
 function emit() {
   saveState();
   channel.postMessage({ type: 'state', payload: state });
+}
+
+function pickShareState(source) {
+  return SHARE_STATE_KEYS.reduce((acc, key) => {
+    if (source[key] !== undefined) acc[key] = source[key];
+    return acc;
+  }, {});
+}
+
+function readSharedState() {
+  const encoded = params.get('state');
+  if (!encoded) return {};
+  try {
+    const raw = atob(encoded);
+    const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(json);
+    return pickShareState(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function buildSharedStateQuery() {
+  try {
+    const data = pickShareState(state);
+    const json = JSON.stringify(data);
+    const bytes = new TextEncoder().encode(json);
+    const raw = String.fromCharCode(...bytes);
+    const encoded = btoa(raw);
+    return `state=${encodeURIComponent(encoded)}`;
+  } catch {
+    return '';
+  }
+}
+
+function buildViewUrl(nextView) {
+  const shared = buildSharedStateQuery();
+  const query = [`view=${encodeURIComponent(nextView)}`];
+  if (shared) query.push(shared);
+  return `${location.pathname}?${query.join('&')}`;
 }
 channel.onmessage = (event) => {
   if (event.data?.type === 'state') {
@@ -259,8 +325,8 @@ function bindOperatorEvents() {
       setState({ speed });
     };
   });
-  document.getElementById('openPrompter').onclick = () => window.open(`${location.pathname}?view=prompter`, 'prompterWindow');
-  document.getElementById('openRemote').onclick = () => window.open(`${location.pathname}?view=remote`, 'remoteWindow');
+  document.getElementById('openPrompter').onclick = () => window.open(buildViewUrl('prompter'), 'prompterWindow');
+  document.getElementById('openRemote').onclick = () => window.open(buildViewUrl('remote'), 'remoteWindow');
   document.getElementById('back10').onclick = () => jumpLines(10);
   document.getElementById('markerPrev').onclick = () => jumpMarker(-1);
   document.getElementById('markerNext').onclick = () => jumpMarker(1);
