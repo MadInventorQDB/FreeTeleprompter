@@ -5,13 +5,13 @@ A free browser-based teleprompter for phones, tablets, and computers.
 ## Views
 
 - **Operator view** (default `/`): script editing, transport controls, styling, Google Doc refresh, and display tools.
-- **Prompter view** (`/?view=prompter`): clean full-screen talent-facing feed with optional mirror.
+- **Prompter view** (`/?view=prompter`): clean full-screen talent-facing feed with optional horizontal and vertical mirroring.
 - **Phone remote** (`/?view=remote`): touch-friendly transport and speed controls.
   - To keep phone and operator script/settings in sync, open the remote from the operator's **Open Phone Remote** button so the current state is embedded in the link.
 
 ## Feature highlights
 
-- Independent mirror toggles for operator and prompter output.
+- Independent horizontal and vertical mirror toggles for operator and prompter output.
 - Full-screen clean feed mode.
 - Typography controls: font, size, line spacing, paragraph spacing.
 - Contrast controls: background, text color, optional shadow.

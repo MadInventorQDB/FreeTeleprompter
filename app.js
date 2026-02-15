@@ -8,8 +8,10 @@ const SHARE_STATE_KEYS = [
   'isPlaying',
   'speed',
   'offset',
-  'mirrorPrompter',
-  'mirrorOperator',
+  'mirrorPrompterHorizontal',
+  'mirrorPrompterVertical',
+  'mirrorOperatorHorizontal',
+  'mirrorOperatorVertical',
   'fontFamily',
   'fontSize',
   'lineHeight',
@@ -41,8 +43,10 @@ const defaultState = {
   isPlaying: false,
   speed: 35,
   offset: 0,
-  mirrorPrompter: true,
-  mirrorOperator: false,
+  mirrorPrompterHorizontal: true,
+  mirrorPrompterVertical: false,
+  mirrorOperatorHorizontal: false,
+  mirrorOperatorVertical: false,
   fontFamily: 'Inter, system-ui, sans-serif',
   fontSize: 58,
   lineHeight: 1.5,
@@ -79,7 +83,23 @@ function hydrateState() {
   const scriptId = global.scriptId || 'default';
   const perScript = readStorage(`ft-script-${scriptId}`) || {};
   const sharedState = readSharedState();
-  return { ...defaultState, ...global, ...perScript, ...sharedState, scriptId: sharedState.scriptId || scriptId };
+  const merged = { ...defaultState, ...global, ...perScript, ...normalizeMirrorState(sharedState), scriptId: sharedState.scriptId || scriptId };
+  return normalizeMirrorState(merged);
+}
+
+function normalizeMirrorState(next = {}) {
+  const normalized = { ...next };
+  if (normalized.mirrorPrompterHorizontal === undefined && typeof normalized.mirrorPrompter === 'boolean') {
+    normalized.mirrorPrompterHorizontal = normalized.mirrorPrompter;
+  }
+  if (normalized.mirrorOperatorHorizontal === undefined && typeof normalized.mirrorOperator === 'boolean') {
+    normalized.mirrorOperatorHorizontal = normalized.mirrorOperator;
+  }
+  if (normalized.mirrorPrompterVertical === undefined) normalized.mirrorPrompterVertical = defaultState.mirrorPrompterVertical;
+  if (normalized.mirrorOperatorVertical === undefined) normalized.mirrorOperatorVertical = defaultState.mirrorOperatorVertical;
+  if (normalized.mirrorPrompterHorizontal === undefined) normalized.mirrorPrompterHorizontal = defaultState.mirrorPrompterHorizontal;
+  if (normalized.mirrorOperatorHorizontal === undefined) normalized.mirrorOperatorHorizontal = defaultState.mirrorOperatorHorizontal;
+  return normalized;
 }
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -93,8 +113,10 @@ function saveState() {
   }));
   localStorage.setItem(`ft-script-${state.scriptId}`, JSON.stringify({
     scriptText: state.scriptText,
-    mirrorPrompter: state.mirrorPrompter,
-    mirrorOperator: state.mirrorOperator,
+    mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
+    mirrorPrompterVertical: state.mirrorPrompterVertical,
+    mirrorOperatorHorizontal: state.mirrorOperatorHorizontal,
+    mirrorOperatorVertical: state.mirrorOperatorVertical,
     fontFamily: state.fontFamily,
     fontSize: state.fontSize,
     lineHeight: state.lineHeight,
@@ -250,10 +272,21 @@ function stageTemplate() {
   const paras = parseScript(state.scriptText)
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
-  return `<div id="scriptStage" class="${shouldMirror() ? 'mirrored' : 'not-mirrored'}" style="--y:${state.offset}px">${paras}</div>`;
+  const mirror = currentViewMirrorState();
+  return `<div id="scriptStage" style="--y:${state.offset}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
 }
-function shouldMirror() {
-  return view === 'prompter' ? state.mirrorPrompter : state.mirrorOperator;
+
+function currentViewMirrorState() {
+  if (view === 'prompter') {
+    return {
+      horizontal: state.mirrorPrompterHorizontal,
+      vertical: state.mirrorPrompterVertical,
+    };
+  }
+  return {
+    horizontal: state.mirrorOperatorHorizontal,
+    vertical: state.mirrorOperatorVertical,
+  };
 }
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
@@ -275,7 +308,7 @@ function prompterMarkup(showOverlay = true) {
       <div class="reading-guide ${state.guideMode === 'line' ? 'center-line' : ''}"></div>
       <div class="operator-overlay">
         <span>${state.isPlaying ? 'Playing' : 'Paused'} • ${state.speed.toFixed(1)} px/s</span>
-        ${showOverlay ? '<span>F: fullscreen • M: mirror • Space: play/pause</span>' : ''}
+        ${showOverlay ? '<span>F: fullscreen • M: horizontal mirror • V: vertical mirror • Space: play/pause</span>' : ''}
       </div>
     </section>`;
 }
@@ -328,8 +361,10 @@ function renderOperator() {
       </div>
       <div class="section">
         <h3>Views + Displays</h3>
-        <div class="row"><label>Prompter mirrored</label><input id="mirrorPrompter" type="checkbox" ${state.mirrorPrompter ? 'checked' : ''} /></div>
-        <div class="row"><label>Operator mirrored</label><input id="mirrorOperator" type="checkbox" ${state.mirrorOperator ? 'checked' : ''} /></div>
+        <div class="row"><label>Prompter mirror (horizontal)</label><input id="mirrorPrompterHorizontal" type="checkbox" ${state.mirrorPrompterHorizontal ? 'checked' : ''} /></div>
+        <div class="row"><label>Prompter mirror (vertical)</label><input id="mirrorPrompterVertical" type="checkbox" ${state.mirrorPrompterVertical ? 'checked' : ''} /></div>
+        <div class="row"><label>Operator mirror (horizontal)</label><input id="mirrorOperatorHorizontal" type="checkbox" ${state.mirrorOperatorHorizontal ? 'checked' : ''} /></div>
+        <div class="row"><label>Operator mirror (vertical)</label><input id="mirrorOperatorVertical" type="checkbox" ${state.mirrorOperatorVertical ? 'checked' : ''} /></div>
         <div class="row"><label>Clean feed</label><input id="cleanFeed" type="checkbox" ${state.cleanFeed ? 'checked' : ''} /></div>
         <div class="row wrap"><button class="btn" id="openPrompter">Open Prompter Window</button><button class="btn" id="openRemote">Open Phone Remote</button></div>
       </div>
@@ -377,8 +412,10 @@ function bindOperatorEvents() {
     guideMode: (e) => setState({ guideMode: e.target.value }),
     bgColor: (e) => setState({ bgColor: e.target.value }),
     textColor: (e) => setState({ textColor: e.target.value }),
-    mirrorPrompter: (e) => setState({ mirrorPrompter: e.target.checked }),
-    mirrorOperator: (e) => setState({ mirrorOperator: e.target.checked }),
+    mirrorPrompterHorizontal: (e) => setState({ mirrorPrompterHorizontal: e.target.checked }),
+    mirrorPrompterVertical: (e) => setState({ mirrorPrompterVertical: e.target.checked }),
+    mirrorOperatorHorizontal: (e) => setState({ mirrorOperatorHorizontal: e.target.checked }),
+    mirrorOperatorVertical: (e) => setState({ mirrorOperatorVertical: e.target.checked }),
     shadowEnabled: (e) => setState({ shadowEnabled: e.target.checked }),
     cleanFeed: (e) => setState({ cleanFeed: e.target.checked }),
     googleDocUrl: (e) => setState({ googleDocUrl: e.target.value }),
@@ -430,7 +467,7 @@ function renderRemote() {
 
 function setState(next, options = {}) {
   const { shouldRender = true, shouldEmit = true } = options;
-  state = { ...state, ...next };
+  state = normalizeMirrorState({ ...state, ...next });
   if (shouldEmit) emit();
   if (shouldRender) render();
 }
@@ -619,7 +656,11 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowLeft') jumpLines(2);
   if (event.key === 'ArrowRight') jumpLines(-2);
   if (event.key.toLowerCase() === 'm') {
-    const key = view === 'prompter' ? 'mirrorPrompter' : 'mirrorOperator';
+    const key = view === 'prompter' ? 'mirrorPrompterHorizontal' : 'mirrorOperatorHorizontal';
+    setState({ [key]: !state[key] });
+  }
+  if (event.key.toLowerCase() === 'v') {
+    const key = view === 'prompter' ? 'mirrorPrompterVertical' : 'mirrorOperatorVertical';
     setState({ [key]: !state[key] });
   }
   if (event.key.toLowerCase() === 'f') document.documentElement.requestFullscreen?.();

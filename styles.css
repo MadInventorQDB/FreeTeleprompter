@@ -93,8 +93,10 @@ textarea#scriptInput {
   white-space: pre-wrap;
 }
 #scriptStage p { margin: 0 0 var(--paragraph-spacing); }
-#scriptStage.mirrored { transform: scaleX(-1) translateY(var(--y, 0px)); transform-origin: center top; }
-#scriptStage.not-mirrored { transform: translateY(var(--y, 0px)); }
+#scriptStage {
+  transform: scale(var(--mirror-x, 1), var(--mirror-y, 1)) translateY(var(--y, 0px));
+  transform-origin: center top;
+}
 .reading-guide {
   position: absolute;
   left: 0;
