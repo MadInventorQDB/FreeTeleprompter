@@ -275,7 +275,7 @@ function stageTemplate() {
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
   const mirror = currentViewMirrorState();
-  return `<div id="scriptMirrorStage" style="--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}"><div id="scriptStage" style="--y:${state.offset}px">${paras}</div></div>`;
+  return `<div id="scriptStage" style="--y:${state.offset}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
 }
 
 function currentViewMirrorState() {
