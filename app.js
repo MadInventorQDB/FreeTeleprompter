@@ -2,6 +2,38 @@ const params = new URLSearchParams(window.location.search);
 const view = params.get('view') || 'operator';
 const app = document.getElementById('app');
 const channel = new BroadcastChannel('free-teleprompter');
+const SHARE_STATE_KEYS = [
+  'scriptId',
+  'scriptText',
+  'isPlaying',
+  'speed',
+  'offset',
+  'mirrorPrompter',
+  'mirrorOperator',
+  'fontFamily',
+  'fontSize',
+  'lineHeight',
+  'paragraphSpacing',
+  'sideMargin',
+  'guideY',
+  'guideHeight',
+  'guideMode',
+  'bgColor',
+  'textColor',
+  'shadowEnabled',
+  'countdown',
+  'cleanFeed',
+  'googleDocUrl',
+  'lastSyncedAt',
+];
+const SHARE_CHANNEL = params.get('channel') || 'default';
+const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+let syncCursor = 0;
+let syncPolling = false;
+const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying']);
+const SAVE_INTERVAL_MS = 240;
+let lastSavedAt = 0;
+
 
 const defaultState = {
   scriptId: 'default',
@@ -39,13 +71,15 @@ const dragScroll = {
   pointerId: null,
   startY: 0,
   startOffset: 0,
+  lastEmitAt: 0,
 };
 
 function hydrateState() {
   const global = readStorage('ft-global') || {};
   const scriptId = global.scriptId || 'default';
   const perScript = readStorage(`ft-script-${scriptId}`) || {};
-  return { ...defaultState, ...global, ...perScript, scriptId };
+  const sharedState = readSharedState();
+  return { ...defaultState, ...global, ...perScript, ...sharedState, scriptId: sharedState.scriptId || scriptId };
 }
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -80,12 +114,119 @@ function saveState() {
 }
 function emit() {
   saveState();
-  channel.postMessage({ type: 'state', payload: state });
+  const payload = pickShareState(state);
+  channel.postMessage({ type: 'state', payload, source: clientId });
+  pushSyncState(payload);
 }
-channel.onmessage = (event) => {
-  if (event.data?.type === 'state') {
-    state = { ...state, ...event.data.payload };
+
+function pickShareState(source) {
+  return SHARE_STATE_KEYS.reduce((acc, key) => {
+    if (source[key] !== undefined) acc[key] = source[key];
+    return acc;
+  }, {});
+}
+
+function readSharedState() {
+  const encoded = params.get('state');
+  if (!encoded) return {};
+  try {
+    const raw = atob(encoded);
+    const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(json);
+    return pickShareState(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function buildSharedStateQuery() {
+  try {
+    const data = pickShareState(state);
+    const json = JSON.stringify(data);
+    const bytes = new TextEncoder().encode(json);
+    let raw = '';
+    bytes.forEach((byte) => { raw += String.fromCharCode(byte); });
+    const encoded = btoa(raw);
+    return `state=${encodeURIComponent(encoded)}`;
+  } catch {
+    return '';
+  }
+}
+
+function buildViewUrl(nextView) {
+  const shared = buildSharedStateQuery();
+  const query = [`view=${encodeURIComponent(nextView)}`, `channel=${encodeURIComponent(SHARE_CHANNEL)}`];
+  if (shared) query.push(shared);
+  return `${location.pathname}?${query.join('&')}`;
+}
+
+function connectSocket() {
+  if (syncPolling) return;
+  syncPolling = true;
+  pollSyncState();
+}
+
+async function pollSyncState() {
+  while (syncPolling) {
+    try {
+      const res = await fetch(`/sync/poll?channel=${encodeURIComponent(SHARE_CHANNEL)}&since=${syncCursor}`);
+      if (!res.ok) throw new Error('poll failed');
+      const data = await res.json();
+      syncCursor = Number(data.cursor || syncCursor);
+      (data.events || []).forEach((event) => {
+        if (event.source === clientId || event.type !== 'state') return;
+        applyIncomingState(event.payload);
+      });
+    } catch {
+      // ignore polling interruptions and retry
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+}
+
+async function pushSyncState(payload) {
+  try {
+    await fetch('/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: SHARE_CHANNEL,
+        event: {
+          type: 'state',
+          source: clientId,
+          payload: pickShareState(payload),
+        },
+      }),
+    });
+  } catch {
+    // ignore sync push failures; local session still works
+  }
+}
+
+function applyIncomingState(next) {
+  const keys = Object.keys(next || {});
+  const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
+
+  state = { ...state, ...next };
+  saveState();
+
+  if (!playbackOnly) {
     render();
+    return;
+  }
+
+  applyOffset();
+  const speedLabel = document.getElementById('speedLabel');
+  if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+  const statusLabel = document.querySelector('.operator-overlay span');
+  if (statusLabel) statusLabel.textContent = `${state.isPlaying ? 'Playing' : 'Paused'} • ${state.speed.toFixed(1)} px/s`;
+}
+
+channel.onmessage = (event) => {
+  if (event.data?.type === 'state' && event.data?.source !== clientId) {
+    applyIncomingState(event.data.payload);
   }
 };
 window.addEventListener('storage', () => {
@@ -259,8 +400,8 @@ function bindOperatorEvents() {
       setState({ speed });
     };
   });
-  document.getElementById('openPrompter').onclick = () => window.open(`${location.pathname}?view=prompter`, 'prompterWindow');
-  document.getElementById('openRemote').onclick = () => window.open(`${location.pathname}?view=remote`, 'remoteWindow');
+  document.getElementById('openPrompter').onclick = () => window.open(buildViewUrl('prompter'), 'prompterWindow');
+  document.getElementById('openRemote').onclick = () => window.open(buildViewUrl('remote'), 'remoteWindow');
   document.getElementById('back10').onclick = () => jumpLines(10);
   document.getElementById('markerPrev').onclick = () => jumpMarker(-1);
   document.getElementById('markerNext').onclick = () => jumpMarker(1);
@@ -287,10 +428,32 @@ function renderRemote() {
   document.getElementById('rMarker').onclick = () => jumpMarker(1);
 }
 
-function setState(next) {
+function setState(next, options = {}) {
+  const { shouldRender = true, shouldEmit = true } = options;
   state = { ...state, ...next };
-  emit();
-  render();
+  if (shouldEmit) emit();
+  if (shouldRender) render();
+}
+
+function captureFocusState() {
+  if (view !== 'operator') return null;
+  const active = document.activeElement;
+  if (!active || !(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement)) return null;
+  return {
+    id: active.id,
+    start: active.selectionStart,
+    end: active.selectionEnd,
+  };
+}
+
+function restoreFocusState(snapshot) {
+  if (!snapshot?.id) return;
+  const el = document.getElementById(snapshot.id);
+  if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
+  el.focus();
+  if (typeof snapshot.start === 'number' && typeof snapshot.end === 'number' && 'setSelectionRange' in el) {
+    el.setSelectionRange(snapshot.start, snapshot.end);
+  }
 }
 
 function loop(now) {
@@ -299,8 +462,10 @@ function loop(now) {
   if (state.isPlaying) {
     state.offset -= state.speed * dt;
     applyOffset();
-    saveState();
-    channel.postMessage({ type: 'state', payload: { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed } });
+    if (now - lastSavedAt > SAVE_INTERVAL_MS) {
+      saveState();
+      lastSavedAt = now;
+    }
   }
   raf = requestAnimationFrame(loop);
 }
@@ -331,6 +496,7 @@ function jumpMarker(dir) {
 }
 
 function render() {
+  const focusSnapshot = captureFocusState();
   if (view === 'operator') renderOperator();
   if (view === 'prompter') renderPrompter(true);
   if (view === 'remote') renderRemote();
@@ -339,6 +505,7 @@ function render() {
   applyOffset();
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+  restoreFocusState(focusSnapshot);
 }
 
 function bindDragScroll() {
@@ -361,8 +528,15 @@ function bindDragScroll() {
     const deltaY = event.clientY - dragScroll.startY;
     state.offset = dragScroll.startOffset + deltaY;
     applyOffset();
-    saveState();
-    channel.postMessage({ type: 'state', payload: { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed } });
+
+    const now = performance.now();
+    if (now - dragScroll.lastEmitAt > 50) {
+      const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
+      saveState();
+      channel.postMessage({ type: 'state', payload, source: clientId });
+      pushSyncState(payload);
+      dragScroll.lastEmitAt = now;
+    }
   };
 
   const stopDrag = (event) => {
@@ -370,6 +544,10 @@ function bindDragScroll() {
     dragScroll.active = false;
     dragScroll.pointerId = null;
     prompterRoot.classList.remove('dragging');
+    const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
+    saveState();
+    channel.postMessage({ type: 'state', payload, source: clientId });
+    pushSyncState(payload);
   };
 
   prompterRoot.onpointerup = stopDrag;
@@ -456,6 +634,7 @@ function escapeHTML(str) {
     .replaceAll("'", '&#039;');
 }
 
+connectSocket();
 render();
 raf = requestAnimationFrame(loop);
 window.addEventListener('beforeunload', () => cancelAnimationFrame(raf));

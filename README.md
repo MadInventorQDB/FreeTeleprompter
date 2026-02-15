@@ -7,6 +7,7 @@ A free browser-based teleprompter for phones, tablets, and computers.
 - **Operator view** (default `/`): script editing, transport controls, styling, Google Doc refresh, and display tools.
 - **Prompter view** (`/?view=prompter`): clean full-screen talent-facing feed with optional mirror.
 - **Phone remote** (`/?view=remote`): touch-friendly transport and speed controls.
+  - To keep phone and operator script/settings in sync, open the remote from the operator's **Open Phone Remote** button so the current state is embedded in the link.
 
 ## Feature highlights
 
@@ -24,8 +25,12 @@ A free browser-based teleprompter for phones, tablets, and computers.
 
 ## Run locally
 
+Use the bundled Python server so operator/remote stay synced across devices via the built-in sync relay endpoint.
+
 ```bash
-python3 -m http.server 4173
+python3 server.py
 ```
 
 Open `http://localhost:4173`.
+
+> If you use a plain static server (like `python -m http.server`), cross-device syncing will not work because there is no sync relay endpoint.
