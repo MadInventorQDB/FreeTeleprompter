@@ -34,7 +34,9 @@ let syncCursor = 0;
 let syncPolling = false;
 const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying']);
 const SAVE_INTERVAL_MS = 240;
+const PLAYBACK_BROADCAST_INTERVAL_MS = 300;
 let lastSavedAt = 0;
+let lastPlaybackEmitAt = 0;
 
 
 const defaultState = {
@@ -273,7 +275,7 @@ function stageTemplate() {
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
   const mirror = currentViewMirrorState();
-  return `<div id="scriptStage" style="--y:${state.offset}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
+  return `<div id="scriptMirrorStage" style="--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}"><div id="scriptStage" style="--y:${state.offset}px">${paras}</div></div>`;
 }
 
 function currentViewMirrorState() {
@@ -502,6 +504,12 @@ function loop(now) {
     if (now - lastSavedAt > SAVE_INTERVAL_MS) {
       saveState();
       lastSavedAt = now;
+    }
+    if (now - lastPlaybackEmitAt > PLAYBACK_BROADCAST_INTERVAL_MS) {
+      const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying };
+      channel.postMessage({ type: 'state', payload, source: clientId });
+      pushSyncState(payload);
+      lastPlaybackEmitAt = now;
     }
   }
   raf = requestAnimationFrame(loop);
