@@ -6,6 +6,7 @@ const SHARE_STATE_KEYS = [
   'scriptId',
   'scriptText',
   'isPlaying',
+  'playbackAt',
   'speed',
   'offset',
   'mirrorPrompterHorizontal',
@@ -32,11 +33,13 @@ const SHARE_CHANNEL = params.get('channel') || 'default';
 const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 let syncCursor = 0;
 let syncPolling = false;
-const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying']);
+const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying', 'playbackAt']);
+const IS_PLAYBACK_DRIVER = view === 'operator';
 const SAVE_INTERVAL_MS = 240;
 const PLAYBACK_BROADCAST_INTERVAL_MS = 300;
 let lastSavedAt = 0;
 let lastPlaybackEmitAt = 0;
+let lastAppliedPlaybackAt = 0;
 
 
 const defaultState = {
@@ -233,6 +236,17 @@ function applyIncomingState(next) {
   const keys = Object.keys(next || {});
   const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
 
+  if (playbackOnly && typeof next.playbackAt === 'number') {
+    if (next.playbackAt < lastAppliedPlaybackAt) return;
+    lastAppliedPlaybackAt = next.playbackAt;
+  }
+
+  if (playbackOnly && !IS_PLAYBACK_DRIVER && state.isPlaying && next.isPlaying) {
+    const movingBackward = next.speed > 0 && typeof next.offset === 'number' && next.offset > state.offset;
+    const movingForward = next.speed < 0 && typeof next.offset === 'number' && next.offset < state.offset;
+    if (movingBackward || movingForward) return;
+  }
+
   state = { ...state, ...next };
   saveState();
 
@@ -254,7 +268,13 @@ channel.onmessage = (event) => {
   }
 };
 window.addEventListener('storage', () => {
-  state = hydrateState();
+  const hydrated = hydrateState();
+  if (!IS_PLAYBACK_DRIVER) {
+    hydrated.offset = state.offset;
+    hydrated.speed = state.speed;
+    hydrated.isPlaying = state.isPlaying;
+  }
+  state = hydrated;
   render();
 });
 
@@ -498,7 +518,7 @@ function restoreFocusState(snapshot) {
 function loop(now) {
   const dt = (now - lastFrame) / 1000;
   lastFrame = now;
-  if (state.isPlaying) {
+  if (state.isPlaying && IS_PLAYBACK_DRIVER) {
     state.offset -= state.speed * dt;
     applyOffset();
     if (now - lastSavedAt > SAVE_INTERVAL_MS) {
@@ -506,7 +526,7 @@ function loop(now) {
       lastSavedAt = now;
     }
     if (now - lastPlaybackEmitAt > PLAYBACK_BROADCAST_INTERVAL_MS) {
-      const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying };
+      const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying, playbackAt: Date.now() };
       channel.postMessage({ type: 'state', payload, source: clientId });
       pushSyncState(payload);
       lastPlaybackEmitAt = now;
