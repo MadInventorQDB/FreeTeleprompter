@@ -376,7 +376,7 @@ function renderOperator() {
       <div class="section">
         <h3>Jump / Seek</h3>
         <div class="row wrap"><button class="btn" id="back10">Back 10 lines</button><button class="btn" id="markerPrev">Prev marker</button><button class="btn" id="markerNext">Next marker</button></div>
-        <input id="seek" class="scrubber" type="range" min="-6000" max="0" step="1" value="${state.offset}" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
+        <input id="seek" class="scrubber" type="range" min="0" max="100" step="1" value="0" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
       </div>
       <div class="section">
         <h3>Typography + Contrast</h3>
@@ -435,7 +435,13 @@ function bindOperatorEvents() {
     },
     speed: (e) => setState({ speed: Number(e.target.value) }),
     countdown: (e) => setState({ countdown: Number(e.target.value) }),
-    seek: (e) => setState({ offset: clampOffset(Number(e.target.value)), isPlaying: false }),
+    seek: (e) => {
+      const pct = Math.max(0, Math.min(100, Number(e.target.value)));
+      const bounds = getScrollBounds();
+      const span = bounds.max - bounds.min;
+      const offset = span <= 0 ? bounds.max : bounds.max - ((pct / 100) * span);
+      setState({ offset: clampOffset(offset), isPlaying: false });
+    },
     fontFamily: (e) => setState({ fontFamily: e.target.value }),
     fontSize: (e) => setState({ fontSize: Number(e.target.value) }),
     lineHeight: (e) => setState({ lineHeight: Number(e.target.value) }),
@@ -604,8 +610,17 @@ function getScrollBounds() {
   const stage = document.getElementById('scriptStage');
   const shell = document.getElementById('prompterRoot');
   if (!stage || !shell) return { min: -6000, max: 0 };
-  const min = Math.min(0, shell.clientHeight - stage.scrollHeight);
-  return { min, max: 0 };
+
+  const guidePx = shell.clientHeight * (state.guideY / 100);
+  const linePx = Math.max(24, state.fontSize * state.lineHeight);
+  const startOffset = guidePx - linePx;
+  const contentHeight = stage.scrollHeight;
+  const endOffset = startOffset - Math.max(0, contentHeight - linePx);
+
+  const overscan = linePx * 1.5;
+  const max = startOffset + overscan;
+  const min = endOffset - overscan;
+  return { min, max };
 }
 
 function clampOffset(offset) {
@@ -619,12 +634,13 @@ function updateSeekControl() {
   if (!seek) return;
   const bounds = getScrollBounds();
   state.offset = clampOffset(state.offset);
-  seek.min = String(Math.floor(bounds.min));
-  seek.max = String(bounds.max);
-  seek.value = String(state.offset);
-  const progress = bounds.max === bounds.min ? 0 : ((state.offset - bounds.min) / (bounds.max - bounds.min)) * 100;
+  seek.min = '0';
+  seek.max = '100';
+  const span = bounds.max - bounds.min;
+  const progress = span <= 0 ? 0 : ((bounds.max - state.offset) / span) * 100;
+  seek.value = String(Math.max(0, Math.min(100, progress)));
   const label = document.getElementById('seekProgress');
-  if (label) label.textContent = `${Math.round(progress)}%`;
+  if (label) label.textContent = `${Math.round(Math.max(0, Math.min(100, progress)))}%`;
 }
 
 function render() {
