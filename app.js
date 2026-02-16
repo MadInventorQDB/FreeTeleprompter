@@ -6,6 +6,7 @@ const SHARE_STATE_KEYS = [
   'scriptId',
   'scriptText',
   'isPlaying',
+  'stateAt',
   'playbackAt',
   'speed',
   'offset',
@@ -41,6 +42,7 @@ const PLAYBACK_BROADCAST_INTERVAL_MS = 300;
 let lastSavedAt = 0;
 let lastPlaybackEmitAt = 0;
 let lastAppliedPlaybackAt = 0;
+let lastAppliedStateAt = 0;
 
 
 const defaultState = {
@@ -145,9 +147,21 @@ function saveState() {
 }
 function emit() {
   saveState();
-  const payload = pickShareState(state);
+  const payload = { ...pickShareState(state), stateAt: Date.now() };
   channel.postMessage({ type: 'state', payload, source: clientId });
   pushSyncState(payload);
+}
+
+function emitPlaybackState(payload) {
+  saveState();
+  const limited = {
+    offset: payload.offset,
+    speed: payload.speed,
+    isPlaying: payload.isPlaying,
+    playbackAt: payload.playbackAt,
+  };
+  channel.postMessage({ type: 'state', payload: limited, source: clientId });
+  pushSyncState(limited);
 }
 
 function pickShareState(source) {
@@ -240,6 +254,11 @@ function applyIncomingState(next) {
   const keys = Object.keys(next || {});
   const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
 
+  if (!playbackOnly && typeof next.stateAt === 'number') {
+    if (next.stateAt < lastAppliedStateAt) return;
+    lastAppliedStateAt = next.stateAt;
+  }
+
   if (playbackOnly && typeof next.playbackAt === 'number') {
     if (next.playbackAt < lastAppliedPlaybackAt) return;
     lastAppliedPlaybackAt = next.playbackAt;
@@ -297,7 +316,7 @@ function stageTemplate() {
 }
 
 function currentViewMirrorState() {
-  if (view === 'prompter') {
+  if (view === 'prompter' || view === 'operator') {
     return {
       horizontal: state.mirrorPrompterHorizontal,
       vertical: state.mirrorPrompterVertical,
@@ -495,7 +514,15 @@ function setState(next, options = {}) {
   const touchesPlayback = ['offset', 'speed', 'isPlaying'].some((key) => Object.prototype.hasOwnProperty.call(next, key));
   const enrichedNext = touchesPlayback && next.playbackAt === undefined ? { ...next, playbackAt: Date.now() } : next;
   state = normalizeMirrorState({ ...state, ...enrichedNext });
-  if (shouldEmit) emit();
+  if (shouldEmit) {
+    const keys = Object.keys(enrichedNext || {});
+    const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
+    if (playbackOnly) {
+      emitPlaybackState(state);
+    } else {
+      emit();
+    }
+  }
   if (shouldRender) render();
 }
 
