@@ -80,6 +80,7 @@ const dragScroll = {
   pointerId: null,
   startY: 0,
   startOffset: 0,
+  startRenderedOffset: 0,
   lastEmitAt: 0,
 };
 
@@ -321,7 +322,8 @@ function currentViewMirrorState() {
 }
 
 function renderedOffset() {
-  return state.offset;
+  const mirror = currentViewMirrorState();
+  return mirror.vertical ? -state.offset : state.offset;
 }
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
@@ -376,7 +378,7 @@ function renderOperator() {
       <div class="section">
         <h3>Jump / Seek</h3>
         <div class="row wrap"><button class="btn" id="back10">Back 10 lines</button><button class="btn" id="markerPrev">Prev marker</button><button class="btn" id="markerNext">Next marker</button></div>
-        <input id="seek" class="scrubber" type="range" min="0" max="100" step="1" value="0" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
+        <input id="seek" class="scrubber" type="range" min="0" max="100" step="0.1" value="0" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
       </div>
       <div class="section">
         <h3>Typography + Contrast</h3>
@@ -569,6 +571,7 @@ function applyOffset() {
   const stage = document.getElementById('scriptStage');
   if (!stage) return;
   stage.style.setProperty('--y', `${renderedOffset()}px`);
+  updateSeekControl();
 }
 
 function jumpLines(count) {
@@ -638,9 +641,10 @@ function updateSeekControl() {
   seek.max = '100';
   const span = bounds.max - bounds.min;
   const progress = span <= 0 ? 0 : ((bounds.max - state.offset) / span) * 100;
-  seek.value = String(Math.max(0, Math.min(100, progress)));
+  const clampedProgress = Math.max(0, Math.min(100, progress));
+  seek.value = clampedProgress.toFixed(2);
   const label = document.getElementById('seekProgress');
-  if (label) label.textContent = `${Math.round(Math.max(0, Math.min(100, progress)))}%`;
+  if (label) label.textContent = `${clampedProgress.toFixed(1)}%`;
 }
 
 function render() {
@@ -654,7 +658,6 @@ function render() {
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
   syncWrapWidthFromOperatorPreview();
-  updateSeekControl();
   restoreFocusState(focusSnapshot);
 }
 
@@ -695,6 +698,7 @@ function bindDragScroll() {
     dragScroll.pointerId = event.pointerId;
     dragScroll.startY = event.clientY;
     dragScroll.startOffset = state.offset;
+    dragScroll.startRenderedOffset = renderedOffset();
     prompterRoot.classList.add('dragging');
     document.querySelector('.layout')?.classList.add('dragging-preview');
     prompterRoot.setPointerCapture?.(event.pointerId);
@@ -704,7 +708,10 @@ function bindDragScroll() {
   prompterRoot.onpointermove = (event) => {
     if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
     const deltaY = event.clientY - dragScroll.startY;
-    state.offset = clampOffset(dragScroll.startOffset + deltaY);
+    const mirror = currentViewMirrorState();
+    const rendered = dragScroll.startRenderedOffset + deltaY;
+    const logicalOffset = mirror.vertical ? -rendered : rendered;
+    state.offset = clampOffset(logicalOffset);
     applyOffset();
 
     const now = performance.now();
