@@ -293,8 +293,21 @@ channel.onmessage = (event) => {
     applyIncomingState(event.data.payload);
   }
 };
-window.addEventListener('storage', () => {
-  state = hydrateState();
+window.addEventListener('storage', (event) => {
+  if (event.key && !event.key.startsWith('ft-')) return;
+  const hydrated = hydrateState();
+  if (!IS_PLAYBACK_DRIVER) {
+    const playbackState = {
+      offset: state.offset,
+      speed: state.speed,
+      isPlaying: state.isPlaying,
+      playbackAt: state.playbackAt,
+    };
+    state = normalizeMirrorState({ ...hydrated, ...playbackState });
+    render();
+    return;
+  }
+  state = hydrated;
   render();
 });
 
@@ -331,7 +344,8 @@ function currentViewMirrorState() {
 }
 
 function renderedOffset() {
-  return state.offset;
+  const mirror = currentViewMirrorState();
+  return mirror.vertical ? -state.offset : state.offset;
 }
 
 function applyVars(root = document.documentElement) {
