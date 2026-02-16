@@ -29,6 +29,7 @@ const SHARE_STATE_KEYS = [
   'googleDocUrl',
   'lastSyncedAt',
 ];
+const NON_PLAYBACK_SHARE_KEYS = SHARE_STATE_KEYS.filter((key) => !['offset', 'speed', 'isPlaying', 'playbackAt'].includes(key));
 const SHARE_CHANNEL = params.get('channel') || 'default';
 const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 let syncCursor = 0;
@@ -108,13 +109,13 @@ function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
 function saveState() {
+  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem('ft-global', JSON.stringify({
     scriptId: state.scriptId,
     offset: state.offset,
     speed: state.speed,
     isPlaying: state.isPlaying,
   }));
-  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem(`ft-script-${state.scriptId}`, JSON.stringify({
     scriptText: state.scriptText,
     mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
@@ -139,7 +140,7 @@ function saveState() {
 }
 function emit() {
   saveState();
-  const payload = { ...pickShareState(state), stateAt: Date.now() };
+  const payload = { ...pickShareState(state, NON_PLAYBACK_SHARE_KEYS), stateAt: Date.now() };
   channel.postMessage({ type: 'state', payload, source: clientId });
   pushSyncState(payload);
 }
@@ -156,8 +157,8 @@ function emitPlaybackState(payload) {
   pushSyncState(limited);
 }
 
-function pickShareState(source) {
-  return SHARE_STATE_KEYS.reduce((acc, key) => {
+function pickShareState(source, keys = SHARE_STATE_KEYS) {
+  return keys.reduce((acc, key) => {
     if (source[key] !== undefined) acc[key] = source[key];
     return acc;
   }, {});
@@ -245,31 +246,34 @@ async function pushSyncState(payload) {
 function applyIncomingState(next) {
   const keys = Object.keys(next || {});
   const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
+  const incoming = playbackOnly
+    ? next
+    : Object.fromEntries(Object.entries(next || {}).filter(([key]) => !PLAYBACK_SYNC_KEYS.has(key)));
 
-  if (!playbackOnly && typeof next.stateAt === 'number') {
-    if (next.stateAt < lastAppliedStateAt) return;
-    lastAppliedStateAt = next.stateAt;
+  if (!playbackOnly && typeof incoming.stateAt === 'number') {
+    if (incoming.stateAt < lastAppliedStateAt) return;
+    lastAppliedStateAt = incoming.stateAt;
   }
 
-  if (playbackOnly && typeof next.playbackAt === 'number') {
-    if (next.playbackAt < lastAppliedPlaybackAt) return;
-    lastAppliedPlaybackAt = next.playbackAt;
+  if (playbackOnly && typeof incoming.playbackAt === 'number') {
+    if (incoming.playbackAt < lastAppliedPlaybackAt) return;
+    lastAppliedPlaybackAt = incoming.playbackAt;
   }
 
-  if (playbackOnly && !IS_PLAYBACK_DRIVER && state.isPlaying && next.isPlaying) {
+  if (playbackOnly && !IS_PLAYBACK_DRIVER && state.isPlaying && incoming.isPlaying) {
     const currentOffset = state.offset;
-    const nextOffset = typeof next.offset === 'number' ? next.offset : currentOffset;
+    const nextOffset = typeof incoming.offset === 'number' ? incoming.offset : currentOffset;
     const delta = Math.abs(nextOffset - currentOffset);
     const isSeek = delta > 150;
 
     if (!isSeek) {
-      const movingBackward = next.speed > 0 && nextOffset > currentOffset;
-      const movingForward = next.speed < 0 && nextOffset < currentOffset;
+      const movingBackward = incoming.speed > 0 && nextOffset > currentOffset;
+      const movingForward = incoming.speed < 0 && nextOffset < currentOffset;
       if (movingBackward || movingForward) return;
     }
   }
 
-  state = { ...state, ...next };
+  state = { ...state, ...incoming };
   saveState();
 
   if (!playbackOnly) {
@@ -289,8 +293,21 @@ channel.onmessage = (event) => {
     applyIncomingState(event.data.payload);
   }
 };
-window.addEventListener('storage', () => {
-  state = hydrateState();
+window.addEventListener('storage', (event) => {
+  if (event.key && !event.key.startsWith('ft-')) return;
+  const hydrated = hydrateState();
+  if (!IS_PLAYBACK_DRIVER) {
+    const playbackState = {
+      offset: state.offset,
+      speed: state.speed,
+      isPlaying: state.isPlaying,
+      playbackAt: state.playbackAt,
+    };
+    state = normalizeMirrorState({ ...hydrated, ...playbackState });
+    render();
+    return;
+  }
+  state = hydrated;
   render();
 });
 
