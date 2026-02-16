@@ -80,7 +80,6 @@ const dragScroll = {
   pointerId: null,
   startY: 0,
   startOffset: 0,
-  startRenderedOffset: 0,
   lastEmitAt: 0,
 };
 
@@ -258,9 +257,16 @@ function applyIncomingState(next) {
   }
 
   if (playbackOnly && !IS_PLAYBACK_DRIVER && state.isPlaying && next.isPlaying) {
-    const movingBackward = next.speed > 0 && typeof next.offset === 'number' && next.offset > state.offset;
-    const movingForward = next.speed < 0 && typeof next.offset === 'number' && next.offset < state.offset;
-    if (movingBackward || movingForward) return;
+    const currentOffset = state.offset;
+    const nextOffset = typeof next.offset === 'number' ? next.offset : currentOffset;
+    const delta = Math.abs(nextOffset - currentOffset);
+    const isSeek = delta > 150;
+
+    if (!isSeek) {
+      const movingBackward = next.speed > 0 && nextOffset > currentOffset;
+      const movingForward = next.speed < 0 && nextOffset < currentOffset;
+      if (movingBackward || movingForward) return;
+    }
   }
 
   state = { ...state, ...next };
@@ -304,8 +310,7 @@ function stageTemplate() {
   const paras = parseScript(state.scriptText)
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
-  const mirror = currentViewMirrorState();
-  return `<div id="scriptStage" style="--y:${renderedOffset()}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
+  return `<div id="scriptStage" style="--y:${renderedOffset()}px">${paras}</div>`;
 }
 
 function currentViewMirrorState() {
@@ -322,9 +327,9 @@ function currentViewMirrorState() {
 }
 
 function renderedOffset() {
-  const mirror = currentViewMirrorState();
-  return mirror.vertical ? -state.offset : state.offset;
+  return state.offset;
 }
+
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
   root.style.setProperty('--fg', state.textColor);
@@ -340,9 +345,12 @@ function applyVars(root = document.documentElement) {
 }
 
 function prompterMarkup(showOverlay = true) {
+  const mirror = currentViewMirrorState();
   return `
     <section class="prompter-shell ${state.cleanFeed ? 'clean-feed' : ''}" id="prompterRoot">
-      <div class="text-track">${stageTemplate()}</div>
+      <div class="text-track" style="--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">
+        ${stageTemplate()}
+      </div>
       <div class="reading-guide ${state.guideMode === 'line' ? 'center-line' : ''}"></div>
       <div class="operator-overlay">
         <span>${state.isPlaying ? 'Playing' : 'Paused'} • ${state.speed.toFixed(1)} px/s</span>
@@ -698,7 +706,6 @@ function bindDragScroll() {
     dragScroll.pointerId = event.pointerId;
     dragScroll.startY = event.clientY;
     dragScroll.startOffset = state.offset;
-    dragScroll.startRenderedOffset = renderedOffset();
     prompterRoot.classList.add('dragging');
     document.querySelector('.layout')?.classList.add('dragging-preview');
     prompterRoot.setPointerCapture?.(event.pointerId);
@@ -709,9 +716,11 @@ function bindDragScroll() {
     if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
     const deltaY = event.clientY - dragScroll.startY;
     const mirror = currentViewMirrorState();
-    const rendered = dragScroll.startRenderedOffset + deltaY;
-    const logicalOffset = mirror.vertical ? -rendered : rendered;
-    state.offset = clampOffset(logicalOffset);
+    
+    // Invert delta if vertically mirrored so touch direction feels natural (dragging up moves content up)
+    const effectiveDelta = (mirror.vertical ? -1 : 1) * deltaY;
+    
+    state.offset = clampOffset(dragScroll.startOffset + effectiveDelta);
     applyOffset();
 
     const now = performance.now();

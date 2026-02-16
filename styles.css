@@ -81,6 +81,9 @@ textarea#scriptInput {
   padding-left: var(--side-margin);
   padding-right: var(--side-margin);
   overflow: hidden;
+  transform: scale(var(--mirror-x, 1), var(--mirror-y, 1));
+  transform-origin: center center;
+  will-change: transform;
 }
 #scriptStage {
   position: absolute;
@@ -88,8 +91,7 @@ textarea#scriptInput {
   right: 0;
   width: min(100%, var(--wrap-width-px, 100%));
   margin: 0 auto;
-  transform: scale(var(--mirror-x, 1), var(--mirror-y, 1)) translateY(var(--y, 0px));
-  transform-origin: center top;
+  transform: translateY(var(--y, 0px));
   will-change: transform;
   font-size: var(--font-size);
   line-height: var(--line-height);
