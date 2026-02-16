@@ -109,13 +109,13 @@ function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
 function saveState() {
+  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem('ft-global', JSON.stringify({
     scriptId: state.scriptId,
     offset: state.offset,
     speed: state.speed,
     isPlaying: state.isPlaying,
   }));
-  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem(`ft-script-${state.scriptId}`, JSON.stringify({
     scriptText: state.scriptText,
     mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
@@ -344,8 +344,7 @@ function currentViewMirrorState() {
 }
 
 function renderedOffset() {
-  const mirror = currentViewMirrorState();
-  return mirror.vertical ? -state.offset : state.offset;
+  return state.offset;
 }
 
 function applyVars(root = document.documentElement) {
