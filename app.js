@@ -12,8 +12,6 @@ const SHARE_STATE_KEYS = [
   'offset',
   'mirrorPrompterHorizontal',
   'mirrorPrompterVertical',
-  'mirrorOperatorHorizontal',
-  'mirrorOperatorVertical',
   'fontFamily',
   'fontSize',
   'lineHeight',
@@ -53,8 +51,6 @@ const defaultState = {
   offset: 0,
   mirrorPrompterHorizontal: true,
   mirrorPrompterVertical: false,
-  mirrorOperatorHorizontal: false,
-  mirrorOperatorVertical: false,
   fontFamily: 'Inter, system-ui, sans-serif',
   fontSize: 58,
   lineHeight: 1.5,
@@ -105,9 +101,7 @@ function normalizeMirrorState(next = {}) {
     normalized.mirrorOperatorHorizontal = normalized.mirrorOperator;
   }
   if (normalized.mirrorPrompterVertical === undefined) normalized.mirrorPrompterVertical = defaultState.mirrorPrompterVertical;
-  if (normalized.mirrorOperatorVertical === undefined) normalized.mirrorOperatorVertical = defaultState.mirrorOperatorVertical;
   if (normalized.mirrorPrompterHorizontal === undefined) normalized.mirrorPrompterHorizontal = defaultState.mirrorPrompterHorizontal;
-  if (normalized.mirrorOperatorHorizontal === undefined) normalized.mirrorOperatorHorizontal = defaultState.mirrorOperatorHorizontal;
   return normalized;
 }
 function readStorage(key) {
@@ -125,8 +119,6 @@ function saveState() {
     scriptText: state.scriptText,
     mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
     mirrorPrompterVertical: state.mirrorPrompterVertical,
-    mirrorOperatorHorizontal: state.mirrorOperatorHorizontal,
-    mirrorOperatorVertical: state.mirrorOperatorVertical,
     fontFamily: state.fontFamily,
     fontSize: state.fontSize,
     lineHeight: state.lineHeight,
@@ -316,15 +308,15 @@ function stageTemplate() {
 }
 
 function currentViewMirrorState() {
-  if (view === 'prompter' || view === 'operator') {
+  if (view === 'prompter') {
     return {
       horizontal: state.mirrorPrompterHorizontal,
       vertical: state.mirrorPrompterVertical,
     };
   }
   return {
-    horizontal: state.mirrorOperatorHorizontal,
-    vertical: state.mirrorOperatorVertical,
+    horizontal: false,
+    vertical: false,
   };
 }
 
@@ -384,7 +376,7 @@ function renderOperator() {
       <div class="section">
         <h3>Jump / Seek</h3>
         <div class="row wrap"><button class="btn" id="back10">Back 10 lines</button><button class="btn" id="markerPrev">Prev marker</button><button class="btn" id="markerNext">Next marker</button></div>
-        <input id="seek" class="scrubber" type="range" min="-6000" max="200" step="1" value="${state.offset}" />
+        <input id="seek" class="scrubber" type="range" min="-6000" max="0" step="1" value="${state.offset}" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
       </div>
       <div class="section">
         <h3>Typography + Contrast</h3>
@@ -407,8 +399,6 @@ function renderOperator() {
         <h3>Views + Displays</h3>
         <div class="row"><label>Prompter mirror (horizontal)</label><input id="mirrorPrompterHorizontal" type="checkbox" ${state.mirrorPrompterHorizontal ? 'checked' : ''} /></div>
         <div class="row"><label>Prompter mirror (vertical)</label><input id="mirrorPrompterVertical" type="checkbox" ${state.mirrorPrompterVertical ? 'checked' : ''} /></div>
-        <div class="row"><label>Operator mirror (horizontal)</label><input id="mirrorOperatorHorizontal" type="checkbox" ${state.mirrorOperatorHorizontal ? 'checked' : ''} /></div>
-        <div class="row"><label>Operator mirror (vertical)</label><input id="mirrorOperatorVertical" type="checkbox" ${state.mirrorOperatorVertical ? 'checked' : ''} /></div>
         <div class="row"><label>Clean feed</label><input id="cleanFeed" type="checkbox" ${state.cleanFeed ? 'checked' : ''} /></div>
         <div class="row wrap"><button class="btn" id="openPrompter">Open Prompter Window</button><button class="btn" id="openRemote">Open Phone Remote</button></div>
       </div>
@@ -445,7 +435,7 @@ function bindOperatorEvents() {
     },
     speed: (e) => setState({ speed: Number(e.target.value) }),
     countdown: (e) => setState({ countdown: Number(e.target.value) }),
-    seek: (e) => setState({ offset: Number(e.target.value), isPlaying: false }),
+    seek: (e) => setState({ offset: clampOffset(Number(e.target.value)), isPlaying: false }),
     fontFamily: (e) => setState({ fontFamily: e.target.value }),
     fontSize: (e) => setState({ fontSize: Number(e.target.value) }),
     lineHeight: (e) => setState({ lineHeight: Number(e.target.value) }),
@@ -458,8 +448,6 @@ function bindOperatorEvents() {
     textColor: (e) => setState({ textColor: e.target.value }),
     mirrorPrompterHorizontal: (e) => setState({ mirrorPrompterHorizontal: e.target.checked }),
     mirrorPrompterVertical: (e) => setState({ mirrorPrompterVertical: e.target.checked }),
-    mirrorOperatorHorizontal: (e) => setState({ mirrorOperatorHorizontal: e.target.checked }),
-    mirrorOperatorVertical: (e) => setState({ mirrorOperatorVertical: e.target.checked }),
     shadowEnabled: (e) => setState({ shadowEnabled: e.target.checked }),
     cleanFeed: (e) => setState({ cleanFeed: e.target.checked }),
     googleDocUrl: (e) => setState({ googleDocUrl: e.target.value }),
@@ -513,6 +501,9 @@ function setState(next, options = {}) {
   const { shouldRender = true, shouldEmit = true } = options;
   const touchesPlayback = ['offset', 'speed', 'isPlaying'].some((key) => Object.prototype.hasOwnProperty.call(next, key));
   const enrichedNext = touchesPlayback && next.playbackAt === undefined ? { ...next, playbackAt: Date.now() } : next;
+  if (Object.prototype.hasOwnProperty.call(enrichedNext, 'offset')) {
+    enrichedNext.offset = clampOffset(enrichedNext.offset);
+  }
   state = normalizeMirrorState({ ...state, ...enrichedNext });
   if (shouldEmit) {
     const keys = Object.keys(enrichedNext || {});
@@ -551,7 +542,7 @@ function loop(now) {
   const dt = (now - lastFrame) / 1000;
   lastFrame = now;
   if (state.isPlaying) {
-    state.offset -= state.speed * dt;
+    state.offset = clampOffset(state.offset - (state.speed * dt));
     applyOffset();
     if (IS_PLAYBACK_DRIVER) {
       if (now - lastSavedAt > SAVE_INTERVAL_MS) {
@@ -609,6 +600,33 @@ function syncWrapWidthFromOperatorPreview() {
   pushSyncState(payload);
 }
 
+function getScrollBounds() {
+  const stage = document.getElementById('scriptStage');
+  const shell = document.getElementById('prompterRoot');
+  if (!stage || !shell) return { min: -6000, max: 0 };
+  const min = Math.min(0, shell.clientHeight - stage.scrollHeight);
+  return { min, max: 0 };
+}
+
+function clampOffset(offset) {
+  const bounds = getScrollBounds();
+  if (!Number.isFinite(offset)) return bounds.max;
+  return Math.max(bounds.min, Math.min(bounds.max, offset));
+}
+
+function updateSeekControl() {
+  const seek = document.getElementById('seek');
+  if (!seek) return;
+  const bounds = getScrollBounds();
+  state.offset = clampOffset(state.offset);
+  seek.min = String(Math.floor(bounds.min));
+  seek.max = String(bounds.max);
+  seek.value = String(state.offset);
+  const progress = bounds.max === bounds.min ? 0 : ((state.offset - bounds.min) / (bounds.max - bounds.min)) * 100;
+  const label = document.getElementById('seekProgress');
+  if (label) label.textContent = `${Math.round(progress)}%`;
+}
+
 function render() {
   const focusSnapshot = captureFocusState();
   if (view === 'operator') renderOperator();
@@ -620,6 +638,7 @@ function render() {
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
   syncWrapWidthFromOperatorPreview();
+  updateSeekControl();
   restoreFocusState(focusSnapshot);
 }
 
@@ -669,7 +688,7 @@ function bindDragScroll() {
   prompterRoot.onpointermove = (event) => {
     if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
     const deltaY = event.clientY - dragScroll.startY;
-    state.offset = dragScroll.startOffset + deltaY;
+    state.offset = clampOffset(dragScroll.startOffset + deltaY);
     applyOffset();
 
     const now = performance.now();
@@ -763,11 +782,11 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowLeft') jumpLines(2);
   if (event.key === 'ArrowRight') jumpLines(-2);
   if (event.key.toLowerCase() === 'm') {
-    const key = view === 'prompter' ? 'mirrorPrompterHorizontal' : 'mirrorOperatorHorizontal';
+    const key = 'mirrorPrompterHorizontal';
     setState({ [key]: !state[key] });
   }
   if (event.key.toLowerCase() === 'v') {
-    const key = view === 'prompter' ? 'mirrorPrompterVertical' : 'mirrorOperatorVertical';
+    const key = 'mirrorPrompterVertical';
     setState({ [key]: !state[key] });
   }
   if (event.key.toLowerCase() === 'f') document.documentElement.requestFullscreen?.();
