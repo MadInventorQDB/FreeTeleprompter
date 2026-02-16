@@ -295,7 +295,7 @@ function stageTemplate() {
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
   const mirror = currentViewMirrorState();
-  return `<div id="scriptStage" style="--y:${state.offset}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
+  return `<div id="scriptStage" style="--y:${renderedOffset()}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
 }
 
 function currentViewMirrorState() {
@@ -309,6 +309,11 @@ function currentViewMirrorState() {
     horizontal: state.mirrorOperatorHorizontal,
     vertical: state.mirrorOperatorVertical,
   };
+}
+
+function renderedOffset() {
+  const mirror = currentViewMirrorState();
+  return mirror.vertical ? -state.offset : state.offset;
 }
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
@@ -489,7 +494,9 @@ function renderRemote() {
 
 function setState(next, options = {}) {
   const { shouldRender = true, shouldEmit = true } = options;
-  state = normalizeMirrorState({ ...state, ...next });
+  const touchesPlayback = ['offset', 'speed', 'isPlaying'].some((key) => Object.prototype.hasOwnProperty.call(next, key));
+  const enrichedNext = touchesPlayback && next.playbackAt === undefined ? { ...next, playbackAt: Date.now() } : next;
+  state = normalizeMirrorState({ ...state, ...enrichedNext });
   if (shouldEmit) emit();
   if (shouldRender) render();
 }
@@ -518,18 +525,20 @@ function restoreFocusState(snapshot) {
 function loop(now) {
   const dt = (now - lastFrame) / 1000;
   lastFrame = now;
-  if (state.isPlaying && IS_PLAYBACK_DRIVER) {
+  if (state.isPlaying) {
     state.offset -= state.speed * dt;
     applyOffset();
-    if (now - lastSavedAt > SAVE_INTERVAL_MS) {
-      saveState();
-      lastSavedAt = now;
-    }
-    if (now - lastPlaybackEmitAt > PLAYBACK_BROADCAST_INTERVAL_MS) {
-      const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying, playbackAt: Date.now() };
-      channel.postMessage({ type: 'state', payload, source: clientId });
-      pushSyncState(payload);
-      lastPlaybackEmitAt = now;
+    if (IS_PLAYBACK_DRIVER) {
+      if (now - lastSavedAt > SAVE_INTERVAL_MS) {
+        saveState();
+        lastSavedAt = now;
+      }
+      if (now - lastPlaybackEmitAt > PLAYBACK_BROADCAST_INTERVAL_MS) {
+        const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying, playbackAt: Date.now() };
+        channel.postMessage({ type: 'state', payload, source: clientId });
+        pushSyncState(payload);
+        lastPlaybackEmitAt = now;
+      }
     }
   }
   raf = requestAnimationFrame(loop);
@@ -537,7 +546,7 @@ function loop(now) {
 function applyOffset() {
   const stage = document.getElementById('scriptStage');
   if (!stage) return;
-  stage.style.setProperty('--y', `${state.offset}px`);
+  stage.style.setProperty('--y', `${renderedOffset()}px`);
 }
 
 function jumpLines(count) {
@@ -577,6 +586,32 @@ function bindDragScroll() {
   const prompterRoot = document.getElementById('prompterRoot');
   if (!prompterRoot) return;
 
+  const finishDrag = () => {
+    dragScroll.active = false;
+    dragScroll.pointerId = null;
+    prompterRoot.classList.remove('dragging');
+    const payload = {
+      offset: state.offset,
+      isPlaying: state.isPlaying,
+      speed: state.speed,
+      playbackAt: Date.now(),
+    };
+    saveState();
+    channel.postMessage({ type: 'state', payload, source: clientId });
+    pushSyncState(payload);
+  };
+
+  const stopDrag = (event) => {
+    if (!dragScroll.active) return;
+    if (event && dragScroll.pointerId !== null && event.pointerId !== undefined && event.pointerId !== dragScroll.pointerId) return;
+    finishDrag();
+  };
+
+  const forceStopDrag = () => {
+    if (!dragScroll.active) return;
+    finishDrag();
+  };
+
   prompterRoot.onpointerdown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     dragScroll.active = true;
@@ -596,7 +631,12 @@ function bindDragScroll() {
 
     const now = performance.now();
     if (now - dragScroll.lastEmitAt > 50) {
-      const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
+      const payload = {
+        offset: state.offset,
+        isPlaying: state.isPlaying,
+        speed: state.speed,
+        playbackAt: Date.now(),
+      };
       saveState();
       channel.postMessage({ type: 'state', payload, source: clientId });
       pushSyncState(payload);
@@ -604,19 +644,15 @@ function bindDragScroll() {
     }
   };
 
-  const stopDrag = (event) => {
-    if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
-    dragScroll.active = false;
-    dragScroll.pointerId = null;
-    prompterRoot.classList.remove('dragging');
-    const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
-    saveState();
-    channel.postMessage({ type: 'state', payload, source: clientId });
-    pushSyncState(payload);
-  };
-
   prompterRoot.onpointerup = stopDrag;
   prompterRoot.onpointercancel = stopDrag;
+  prompterRoot.onlostpointercapture = stopDrag;
+  window.onpointerup = stopDrag;
+  window.onpointercancel = stopDrag;
+  window.onblur = forceStopDrag;
+  document.onvisibilitychange = () => {
+    if (document.visibilityState !== 'visible') forceStopDrag();
+  };
 }
 
 async function refreshGoogleDoc() {
