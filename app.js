@@ -6,10 +6,12 @@ const SHARE_STATE_KEYS = [
   'scriptId',
   'scriptText',
   'isPlaying',
+  'stateAt',
+  'playbackAt',
   'speed',
   'offset',
-  'mirrorPrompter',
-  'mirrorOperator',
+  'mirrorPrompterHorizontal',
+  'mirrorPrompterVertical',
   'fontFamily',
   'fontSize',
   'lineHeight',
@@ -18,6 +20,7 @@ const SHARE_STATE_KEYS = [
   'guideY',
   'guideHeight',
   'guideMode',
+  'wrapWidthPx',
   'bgColor',
   'textColor',
   'shadowEnabled',
@@ -30,9 +33,14 @@ const SHARE_CHANNEL = params.get('channel') || 'default';
 const clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 let syncCursor = 0;
 let syncPolling = false;
-const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying']);
+const PLAYBACK_SYNC_KEYS = new Set(['offset', 'speed', 'isPlaying', 'playbackAt']);
+const IS_PLAYBACK_DRIVER = view === 'operator';
 const SAVE_INTERVAL_MS = 240;
+const PLAYBACK_BROADCAST_INTERVAL_MS = 300;
 let lastSavedAt = 0;
+let lastPlaybackEmitAt = 0;
+let lastAppliedPlaybackAt = 0;
+let lastAppliedStateAt = 0;
 
 
 const defaultState = {
@@ -41,8 +49,8 @@ const defaultState = {
   isPlaying: false,
   speed: 35,
   offset: 0,
-  mirrorPrompter: true,
-  mirrorOperator: false,
+  mirrorPrompterHorizontal: true,
+  mirrorPrompterVertical: false,
   fontFamily: 'Inter, system-ui, sans-serif',
   fontSize: 58,
   lineHeight: 1.5,
@@ -51,6 +59,7 @@ const defaultState = {
   guideY: 50,
   guideHeight: 20,
   guideMode: 'band',
+  wrapWidthPx: 0,
   bgColor: '#111111',
   textColor: '#ffffff',
   shadowEnabled: true,
@@ -71,6 +80,7 @@ const dragScroll = {
   pointerId: null,
   startY: 0,
   startOffset: 0,
+  startRenderedOffset: 0,
   lastEmitAt: 0,
 };
 
@@ -79,7 +89,21 @@ function hydrateState() {
   const scriptId = global.scriptId || 'default';
   const perScript = readStorage(`ft-script-${scriptId}`) || {};
   const sharedState = readSharedState();
-  return { ...defaultState, ...global, ...perScript, ...sharedState, scriptId: sharedState.scriptId || scriptId };
+  const merged = { ...defaultState, ...global, ...perScript, ...normalizeMirrorState(sharedState), scriptId: sharedState.scriptId || scriptId };
+  return normalizeMirrorState(merged);
+}
+
+function normalizeMirrorState(next = {}) {
+  const normalized = { ...next };
+  if (normalized.mirrorPrompterHorizontal === undefined && typeof normalized.mirrorPrompter === 'boolean') {
+    normalized.mirrorPrompterHorizontal = normalized.mirrorPrompter;
+  }
+  if (normalized.mirrorOperatorHorizontal === undefined && typeof normalized.mirrorOperator === 'boolean') {
+    normalized.mirrorOperatorHorizontal = normalized.mirrorOperator;
+  }
+  if (normalized.mirrorPrompterVertical === undefined) normalized.mirrorPrompterVertical = defaultState.mirrorPrompterVertical;
+  if (normalized.mirrorPrompterHorizontal === undefined) normalized.mirrorPrompterHorizontal = defaultState.mirrorPrompterHorizontal;
+  return normalized;
 }
 function readStorage(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -91,10 +115,11 @@ function saveState() {
     speed: state.speed,
     isPlaying: state.isPlaying,
   }));
+  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem(`ft-script-${state.scriptId}`, JSON.stringify({
     scriptText: state.scriptText,
-    mirrorPrompter: state.mirrorPrompter,
-    mirrorOperator: state.mirrorOperator,
+    mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
+    mirrorPrompterVertical: state.mirrorPrompterVertical,
     fontFamily: state.fontFamily,
     fontSize: state.fontSize,
     lineHeight: state.lineHeight,
@@ -103,6 +128,7 @@ function saveState() {
     guideY: state.guideY,
     guideHeight: state.guideHeight,
     guideMode: state.guideMode,
+    wrapWidthPx: state.wrapWidthPx,
     bgColor: state.bgColor,
     textColor: state.textColor,
     shadowEnabled: state.shadowEnabled,
@@ -114,9 +140,21 @@ function saveState() {
 }
 function emit() {
   saveState();
-  const payload = pickShareState(state);
+  const payload = { ...pickShareState(state), stateAt: Date.now() };
   channel.postMessage({ type: 'state', payload, source: clientId });
   pushSyncState(payload);
+}
+
+function emitPlaybackState(payload) {
+  saveState();
+  const limited = {
+    offset: payload.offset,
+    speed: payload.speed,
+    isPlaying: payload.isPlaying,
+    playbackAt: payload.playbackAt,
+  };
+  channel.postMessage({ type: 'state', payload: limited, source: clientId });
+  pushSyncState(limited);
 }
 
 function pickShareState(source) {
@@ -209,6 +247,22 @@ function applyIncomingState(next) {
   const keys = Object.keys(next || {});
   const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
 
+  if (!playbackOnly && typeof next.stateAt === 'number') {
+    if (next.stateAt < lastAppliedStateAt) return;
+    lastAppliedStateAt = next.stateAt;
+  }
+
+  if (playbackOnly && typeof next.playbackAt === 'number') {
+    if (next.playbackAt < lastAppliedPlaybackAt) return;
+    lastAppliedPlaybackAt = next.playbackAt;
+  }
+
+  if (playbackOnly && !IS_PLAYBACK_DRIVER && state.isPlaying && next.isPlaying) {
+    const movingBackward = next.speed > 0 && typeof next.offset === 'number' && next.offset > state.offset;
+    const movingForward = next.speed < 0 && typeof next.offset === 'number' && next.offset < state.offset;
+    if (movingBackward || movingForward) return;
+  }
+
   state = { ...state, ...next };
   saveState();
 
@@ -250,10 +304,26 @@ function stageTemplate() {
   const paras = parseScript(state.scriptText)
     .map((p) => `<p>${escapeHTML(p)}</p>`)
     .join('');
-  return `<div id="scriptStage" class="${shouldMirror() ? 'mirrored' : 'not-mirrored'}" style="--y:${state.offset}px">${paras}</div>`;
+  const mirror = currentViewMirrorState();
+  return `<div id="scriptStage" style="--y:${renderedOffset()}px;--mirror-x:${mirror.horizontal ? -1 : 1};--mirror-y:${mirror.vertical ? -1 : 1}">${paras}</div>`;
 }
-function shouldMirror() {
-  return view === 'prompter' ? state.mirrorPrompter : state.mirrorOperator;
+
+function currentViewMirrorState() {
+  if (view === 'prompter') {
+    return {
+      horizontal: state.mirrorPrompterHorizontal,
+      vertical: state.mirrorPrompterVertical,
+    };
+  }
+  return {
+    horizontal: false,
+    vertical: false,
+  };
+}
+
+function renderedOffset() {
+  const mirror = currentViewMirrorState();
+  return mirror.vertical ? -state.offset : state.offset;
 }
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
@@ -265,6 +335,7 @@ function applyVars(root = document.documentElement) {
   root.style.setProperty('--guide-y', String(state.guideY));
   root.style.setProperty('--guide-height', String(state.guideHeight));
   root.style.setProperty('--font-family', state.fontFamily);
+  root.style.setProperty('--wrap-width-px', state.wrapWidthPx > 0 ? `${state.wrapWidthPx}px` : '100%');
   root.style.setProperty('--shadow', state.shadowEnabled ? '0 2px 12px rgba(0,0,0,.65)' : 'none');
 }
 
@@ -275,7 +346,7 @@ function prompterMarkup(showOverlay = true) {
       <div class="reading-guide ${state.guideMode === 'line' ? 'center-line' : ''}"></div>
       <div class="operator-overlay">
         <span>${state.isPlaying ? 'Playing' : 'Paused'} • ${state.speed.toFixed(1)} px/s</span>
-        ${showOverlay ? '<span>F: fullscreen • M: mirror • Space: play/pause</span>' : ''}
+        ${showOverlay ? '<span>F: fullscreen • M: horizontal mirror • V: vertical mirror • Space: play/pause</span>' : ''}
       </div>
     </section>`;
 }
@@ -307,7 +378,7 @@ function renderOperator() {
       <div class="section">
         <h3>Jump / Seek</h3>
         <div class="row wrap"><button class="btn" id="back10">Back 10 lines</button><button class="btn" id="markerPrev">Prev marker</button><button class="btn" id="markerNext">Next marker</button></div>
-        <input id="seek" class="scrubber" type="range" min="-6000" max="200" step="1" value="${state.offset}" />
+        <input id="seek" class="scrubber" type="range" min="0" max="100" step="0.1" value="0" />\n        <div class="row seek-meta"><span id="seekStart" class="badge">Start</span><span id="seekProgress" class="badge">0%</span><span id="seekEnd" class="badge">End</span></div>
       </div>
       <div class="section">
         <h3>Typography + Contrast</h3>
@@ -328,8 +399,8 @@ function renderOperator() {
       </div>
       <div class="section">
         <h3>Views + Displays</h3>
-        <div class="row"><label>Prompter mirrored</label><input id="mirrorPrompter" type="checkbox" ${state.mirrorPrompter ? 'checked' : ''} /></div>
-        <div class="row"><label>Operator mirrored</label><input id="mirrorOperator" type="checkbox" ${state.mirrorOperator ? 'checked' : ''} /></div>
+        <div class="row"><label>Prompter mirror (horizontal)</label><input id="mirrorPrompterHorizontal" type="checkbox" ${state.mirrorPrompterHorizontal ? 'checked' : ''} /></div>
+        <div class="row"><label>Prompter mirror (vertical)</label><input id="mirrorPrompterVertical" type="checkbox" ${state.mirrorPrompterVertical ? 'checked' : ''} /></div>
         <div class="row"><label>Clean feed</label><input id="cleanFeed" type="checkbox" ${state.cleanFeed ? 'checked' : ''} /></div>
         <div class="row wrap"><button class="btn" id="openPrompter">Open Prompter Window</button><button class="btn" id="openRemote">Open Phone Remote</button></div>
       </div>
@@ -366,7 +437,13 @@ function bindOperatorEvents() {
     },
     speed: (e) => setState({ speed: Number(e.target.value) }),
     countdown: (e) => setState({ countdown: Number(e.target.value) }),
-    seek: (e) => setState({ offset: Number(e.target.value), isPlaying: false }),
+    seek: (e) => {
+      const pct = Math.max(0, Math.min(100, Number(e.target.value)));
+      const bounds = getScrollBounds();
+      const span = bounds.max - bounds.min;
+      const offset = span <= 0 ? bounds.max : bounds.max - ((pct / 100) * span);
+      setState({ offset: clampOffset(offset), isPlaying: false });
+    },
     fontFamily: (e) => setState({ fontFamily: e.target.value }),
     fontSize: (e) => setState({ fontSize: Number(e.target.value) }),
     lineHeight: (e) => setState({ lineHeight: Number(e.target.value) }),
@@ -377,8 +454,8 @@ function bindOperatorEvents() {
     guideMode: (e) => setState({ guideMode: e.target.value }),
     bgColor: (e) => setState({ bgColor: e.target.value }),
     textColor: (e) => setState({ textColor: e.target.value }),
-    mirrorPrompter: (e) => setState({ mirrorPrompter: e.target.checked }),
-    mirrorOperator: (e) => setState({ mirrorOperator: e.target.checked }),
+    mirrorPrompterHorizontal: (e) => setState({ mirrorPrompterHorizontal: e.target.checked }),
+    mirrorPrompterVertical: (e) => setState({ mirrorPrompterVertical: e.target.checked }),
     shadowEnabled: (e) => setState({ shadowEnabled: e.target.checked }),
     cleanFeed: (e) => setState({ cleanFeed: e.target.checked }),
     googleDocUrl: (e) => setState({ googleDocUrl: e.target.value }),
@@ -430,8 +507,21 @@ function renderRemote() {
 
 function setState(next, options = {}) {
   const { shouldRender = true, shouldEmit = true } = options;
-  state = { ...state, ...next };
-  if (shouldEmit) emit();
+  const touchesPlayback = ['offset', 'speed', 'isPlaying'].some((key) => Object.prototype.hasOwnProperty.call(next, key));
+  const enrichedNext = touchesPlayback && next.playbackAt === undefined ? { ...next, playbackAt: Date.now() } : next;
+  if (Object.prototype.hasOwnProperty.call(enrichedNext, 'offset')) {
+    enrichedNext.offset = clampOffset(enrichedNext.offset);
+  }
+  state = normalizeMirrorState({ ...state, ...enrichedNext });
+  if (shouldEmit) {
+    const keys = Object.keys(enrichedNext || {});
+    const playbackOnly = keys.length > 0 && keys.every((key) => PLAYBACK_SYNC_KEYS.has(key));
+    if (playbackOnly) {
+      emitPlaybackState(state);
+    } else {
+      emit();
+    }
+  }
   if (shouldRender) render();
 }
 
@@ -460,11 +550,19 @@ function loop(now) {
   const dt = (now - lastFrame) / 1000;
   lastFrame = now;
   if (state.isPlaying) {
-    state.offset -= state.speed * dt;
+    state.offset = clampOffset(state.offset - (state.speed * dt));
     applyOffset();
-    if (now - lastSavedAt > SAVE_INTERVAL_MS) {
-      saveState();
-      lastSavedAt = now;
+    if (IS_PLAYBACK_DRIVER) {
+      if (now - lastSavedAt > SAVE_INTERVAL_MS) {
+        saveState();
+        lastSavedAt = now;
+      }
+      if (now - lastPlaybackEmitAt > PLAYBACK_BROADCAST_INTERVAL_MS) {
+        const payload = { offset: state.offset, speed: state.speed, isPlaying: state.isPlaying, playbackAt: Date.now() };
+        channel.postMessage({ type: 'state', payload, source: clientId });
+        pushSyncState(payload);
+        lastPlaybackEmitAt = now;
+      }
     }
   }
   raf = requestAnimationFrame(loop);
@@ -472,7 +570,8 @@ function loop(now) {
 function applyOffset() {
   const stage = document.getElementById('scriptStage');
   if (!stage) return;
-  stage.style.setProperty('--y', `${state.offset}px`);
+  stage.style.setProperty('--y', `${renderedOffset()}px`);
+  updateSeekControl();
 }
 
 function jumpLines(count) {
@@ -495,6 +594,59 @@ function jumpMarker(dir) {
   setState({ offset: -target * estLinePx });
 }
 
+function syncWrapWidthFromOperatorPreview() {
+  if (!IS_PLAYBACK_DRIVER) return;
+  const track = document.querySelector('#operatorPreview .text-track');
+  if (!track) return;
+  const width = Math.round(track.clientWidth || 0);
+  if (!width) return;
+  if (Math.abs((state.wrapWidthPx || 0) - width) < 2) return;
+  state.wrapWidthPx = width;
+  applyVars();
+  saveState();
+  const payload = { wrapWidthPx: width };
+  channel.postMessage({ type: 'state', payload, source: clientId });
+  pushSyncState(payload);
+}
+
+function getScrollBounds() {
+  const stage = document.getElementById('scriptStage');
+  const shell = document.getElementById('prompterRoot');
+  if (!stage || !shell) return { min: -6000, max: 0 };
+
+  const guidePx = shell.clientHeight * (state.guideY / 100);
+  const linePx = Math.max(24, state.fontSize * state.lineHeight);
+  const startOffset = guidePx - linePx;
+  const contentHeight = stage.scrollHeight;
+  const endOffset = startOffset - Math.max(0, contentHeight - linePx);
+
+  const overscan = linePx * 1.5;
+  const max = startOffset + overscan;
+  const min = endOffset - overscan;
+  return { min, max };
+}
+
+function clampOffset(offset) {
+  const bounds = getScrollBounds();
+  if (!Number.isFinite(offset)) return bounds.max;
+  return Math.max(bounds.min, Math.min(bounds.max, offset));
+}
+
+function updateSeekControl() {
+  const seek = document.getElementById('seek');
+  if (!seek) return;
+  const bounds = getScrollBounds();
+  state.offset = clampOffset(state.offset);
+  seek.min = '0';
+  seek.max = '100';
+  const span = bounds.max - bounds.min;
+  const progress = span <= 0 ? 0 : ((bounds.max - state.offset) / span) * 100;
+  const clampedProgress = Math.max(0, Math.min(100, progress));
+  seek.value = clampedProgress.toFixed(2);
+  const label = document.getElementById('seekProgress');
+  if (label) label.textContent = `${clampedProgress.toFixed(1)}%`;
+}
+
 function render() {
   const focusSnapshot = captureFocusState();
   if (view === 'operator') renderOperator();
@@ -505,6 +657,7 @@ function render() {
   applyOffset();
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+  syncWrapWidthFromOperatorPreview();
   restoreFocusState(focusSnapshot);
 }
 
@@ -512,26 +665,63 @@ function bindDragScroll() {
   const prompterRoot = document.getElementById('prompterRoot');
   if (!prompterRoot) return;
 
+  const finishDrag = () => {
+    dragScroll.active = false;
+    dragScroll.pointerId = null;
+    prompterRoot.classList.remove('dragging');
+    document.querySelector('.layout')?.classList.remove('dragging-preview');
+    const payload = {
+      offset: state.offset,
+      isPlaying: state.isPlaying,
+      speed: state.speed,
+      playbackAt: Date.now(),
+    };
+    saveState();
+    channel.postMessage({ type: 'state', payload, source: clientId });
+    pushSyncState(payload);
+  };
+
+  const stopDrag = (event) => {
+    if (!dragScroll.active) return;
+    if (event && dragScroll.pointerId !== null && event.pointerId !== undefined && event.pointerId !== dragScroll.pointerId) return;
+    finishDrag();
+  };
+
+  const forceStopDrag = () => {
+    if (!dragScroll.active) return;
+    finishDrag();
+  };
+
   prompterRoot.onpointerdown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     dragScroll.active = true;
     dragScroll.pointerId = event.pointerId;
     dragScroll.startY = event.clientY;
     dragScroll.startOffset = state.offset;
+    dragScroll.startRenderedOffset = renderedOffset();
     prompterRoot.classList.add('dragging');
+    document.querySelector('.layout')?.classList.add('dragging-preview');
     prompterRoot.setPointerCapture?.(event.pointerId);
-    setState({ isPlaying: false });
+    setState({ isPlaying: false }, { shouldRender: false });
   };
 
   prompterRoot.onpointermove = (event) => {
     if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
     const deltaY = event.clientY - dragScroll.startY;
-    state.offset = dragScroll.startOffset + deltaY;
+    const mirror = currentViewMirrorState();
+    const rendered = dragScroll.startRenderedOffset + deltaY;
+    const logicalOffset = mirror.vertical ? -rendered : rendered;
+    state.offset = clampOffset(logicalOffset);
     applyOffset();
 
     const now = performance.now();
     if (now - dragScroll.lastEmitAt > 50) {
-      const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
+      const payload = {
+        offset: state.offset,
+        isPlaying: state.isPlaying,
+        speed: state.speed,
+        playbackAt: Date.now(),
+      };
       saveState();
       channel.postMessage({ type: 'state', payload, source: clientId });
       pushSyncState(payload);
@@ -539,19 +729,15 @@ function bindDragScroll() {
     }
   };
 
-  const stopDrag = (event) => {
-    if (!dragScroll.active || event.pointerId !== dragScroll.pointerId) return;
-    dragScroll.active = false;
-    dragScroll.pointerId = null;
-    prompterRoot.classList.remove('dragging');
-    const payload = { offset: state.offset, isPlaying: state.isPlaying, speed: state.speed };
-    saveState();
-    channel.postMessage({ type: 'state', payload, source: clientId });
-    pushSyncState(payload);
-  };
-
   prompterRoot.onpointerup = stopDrag;
   prompterRoot.onpointercancel = stopDrag;
+  prompterRoot.onlostpointercapture = stopDrag;
+  window.onpointerup = stopDrag;
+  window.onpointercancel = stopDrag;
+  window.onblur = forceStopDrag;
+  document.onvisibilitychange = () => {
+    if (document.visibilityState !== 'visible') forceStopDrag();
+  };
 }
 
 async function refreshGoogleDoc() {
@@ -619,7 +805,11 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowLeft') jumpLines(2);
   if (event.key === 'ArrowRight') jumpLines(-2);
   if (event.key.toLowerCase() === 'm') {
-    const key = view === 'prompter' ? 'mirrorPrompter' : 'mirrorOperator';
+    const key = 'mirrorPrompterHorizontal';
+    setState({ [key]: !state[key] });
+  }
+  if (event.key.toLowerCase() === 'v') {
+    const key = 'mirrorPrompterVertical';
     setState({ [key]: !state[key] });
   }
   if (event.key.toLowerCase() === 'f') document.documentElement.requestFullscreen?.();
@@ -633,6 +823,8 @@ function escapeHTML(str) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
+
+window.addEventListener('resize', () => syncWrapWidthFromOperatorPreview());
 
 connectSocket();
 render();

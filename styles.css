@@ -32,6 +32,7 @@ button, input, select, textarea { font: inherit; }
   background: #171717;
   overflow-y: auto;
 }
+.layout.dragging-preview .operator-panel { pointer-events: none; user-select: none; }
 .section {
   border: 1px solid #2f2f2f;
   border-radius: 8px;
@@ -85,6 +86,10 @@ textarea#scriptInput {
   position: absolute;
   left: 0;
   right: 0;
+  width: min(100%, var(--wrap-width-px, 100%));
+  margin: 0 auto;
+  transform: scale(var(--mirror-x, 1), var(--mirror-y, 1)) translateY(var(--y, 0px));
+  transform-origin: center top;
   will-change: transform;
   font-size: var(--font-size);
   line-height: var(--line-height);
@@ -93,12 +98,12 @@ textarea#scriptInput {
   white-space: pre-wrap;
 }
 #scriptStage p { margin: 0 0 var(--paragraph-spacing); }
-#scriptStage.mirrored { transform: scaleX(-1) translateY(var(--y, 0px)); transform-origin: center top; }
-#scriptStage.not-mirrored { transform: translateY(var(--y, 0px)); }
 .reading-guide {
   position: absolute;
   left: 0;
   right: 0;
+  width: min(100%, var(--wrap-width-px, 100%));
+  margin: 0 auto;
   top: calc(var(--guide-y) * 1%);
   height: calc(var(--guide-height) * 1%);
   transform: translateY(-50%);
@@ -112,6 +117,8 @@ textarea#scriptInput {
   position: absolute;
   left: 0;
   right: 0;
+  width: min(100%, var(--wrap-width-px, 100%));
+  margin: 0 auto;
   bottom: 0;
   padding: .45rem .75rem;
   font-size: .8rem;
