@@ -424,7 +424,7 @@ function renderOperator() {
       </div>
       <div class="section">
         <h3>Views + Displays</h3>
-        <div class="row"><label>Prompter mirror (horizontal)</label><input id="mirrorPrompterHorizontal" type="checkbox" ${state.mirrorPrompterHorizontal ? 'checked' : ''} /></div>
+        <div class="row"><label>Prompter mirror (horizontal)</label><input id="mirrorPrompterHorizontal" type="checkbox" ${!state.mirrorPrompterHorizontal ? 'checked' : ''} /></div>
         <div class="row"><label>Prompter mirror (vertical)</label><input id="mirrorPrompterVertical" type="checkbox" ${state.mirrorPrompterVertical ? 'checked' : ''} /></div>
         <div class="row"><label>Clean feed</label><input id="cleanFeed" type="checkbox" ${state.cleanFeed ? 'checked' : ''} /></div>
         <div class="row wrap"><button class="btn" id="openPrompter">Open Prompter Window</button><button class="btn" id="openRemote">Open Phone Remote</button></div>
@@ -479,7 +479,7 @@ function bindOperatorEvents() {
     guideMode: (e) => setState({ guideMode: e.target.value }),
     bgColor: (e) => setState({ bgColor: e.target.value }),
     textColor: (e) => setState({ textColor: e.target.value }),
-    mirrorPrompterHorizontal: (e) => setState({ mirrorPrompterHorizontal: e.target.checked }),
+    mirrorPrompterHorizontal: (e) => setState({ mirrorPrompterHorizontal: !e.target.checked }),
     mirrorPrompterVertical: (e) => setState({ mirrorPrompterVertical: e.target.checked }),
     shadowEnabled: (e) => setState({ shadowEnabled: e.target.checked }),
     cleanFeed: (e) => setState({ cleanFeed: e.target.checked }),
