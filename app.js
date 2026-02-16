@@ -21,6 +21,7 @@ const SHARE_STATE_KEYS = [
   'guideY',
   'guideHeight',
   'guideMode',
+  'wrapWidthPx',
   'bgColor',
   'textColor',
   'shadowEnabled',
@@ -60,6 +61,7 @@ const defaultState = {
   guideY: 50,
   guideHeight: 20,
   guideMode: 'band',
+  wrapWidthPx: 0,
   bgColor: '#111111',
   textColor: '#ffffff',
   shadowEnabled: true,
@@ -116,6 +118,7 @@ function saveState() {
     speed: state.speed,
     isPlaying: state.isPlaying,
   }));
+  if (!IS_PLAYBACK_DRIVER) return;
   localStorage.setItem(`ft-script-${state.scriptId}`, JSON.stringify({
     scriptText: state.scriptText,
     mirrorPrompterHorizontal: state.mirrorPrompterHorizontal,
@@ -130,6 +133,7 @@ function saveState() {
     guideY: state.guideY,
     guideHeight: state.guideHeight,
     guideMode: state.guideMode,
+    wrapWidthPx: state.wrapWidthPx,
     bgColor: state.bgColor,
     textColor: state.textColor,
     shadowEnabled: state.shadowEnabled,
@@ -268,13 +272,7 @@ channel.onmessage = (event) => {
   }
 };
 window.addEventListener('storage', () => {
-  const hydrated = hydrateState();
-  if (!IS_PLAYBACK_DRIVER) {
-    hydrated.offset = state.offset;
-    hydrated.speed = state.speed;
-    hydrated.isPlaying = state.isPlaying;
-  }
-  state = hydrated;
+  state = hydrateState();
   render();
 });
 
@@ -312,8 +310,7 @@ function currentViewMirrorState() {
 }
 
 function renderedOffset() {
-  const mirror = currentViewMirrorState();
-  return mirror.vertical ? -state.offset : state.offset;
+  return state.offset;
 }
 function applyVars(root = document.documentElement) {
   root.style.setProperty('--bg', state.bgColor);
@@ -325,6 +322,7 @@ function applyVars(root = document.documentElement) {
   root.style.setProperty('--guide-y', String(state.guideY));
   root.style.setProperty('--guide-height', String(state.guideHeight));
   root.style.setProperty('--font-family', state.fontFamily);
+  root.style.setProperty('--wrap-width-px', state.wrapWidthPx > 0 ? `${state.wrapWidthPx}px` : '100%');
   root.style.setProperty('--shadow', state.shadowEnabled ? '0 2px 12px rgba(0,0,0,.65)' : 'none');
 }
 
@@ -569,6 +567,21 @@ function jumpMarker(dir) {
   setState({ offset: -target * estLinePx });
 }
 
+function syncWrapWidthFromOperatorPreview() {
+  if (!IS_PLAYBACK_DRIVER) return;
+  const track = document.querySelector('#operatorPreview .text-track');
+  if (!track) return;
+  const width = Math.round(track.clientWidth || 0);
+  if (!width) return;
+  if (Math.abs((state.wrapWidthPx || 0) - width) < 2) return;
+  state.wrapWidthPx = width;
+  applyVars();
+  saveState();
+  const payload = { wrapWidthPx: width };
+  channel.postMessage({ type: 'state', payload, source: clientId });
+  pushSyncState(payload);
+}
+
 function render() {
   const focusSnapshot = captureFocusState();
   if (view === 'operator') renderOperator();
@@ -579,6 +592,7 @@ function render() {
   applyOffset();
   const speedLabel = document.getElementById('speedLabel');
   if (speedLabel) speedLabel.textContent = `${state.speed.toFixed(0)} px/s`;
+  syncWrapWidthFromOperatorPreview();
   restoreFocusState(focusSnapshot);
 }
 
@@ -590,6 +604,7 @@ function bindDragScroll() {
     dragScroll.active = false;
     dragScroll.pointerId = null;
     prompterRoot.classList.remove('dragging');
+    document.querySelector('.layout')?.classList.remove('dragging-preview');
     const payload = {
       offset: state.offset,
       isPlaying: state.isPlaying,
@@ -619,8 +634,9 @@ function bindDragScroll() {
     dragScroll.startY = event.clientY;
     dragScroll.startOffset = state.offset;
     prompterRoot.classList.add('dragging');
+    document.querySelector('.layout')?.classList.add('dragging-preview');
     prompterRoot.setPointerCapture?.(event.pointerId);
-    setState({ isPlaying: false });
+    setState({ isPlaying: false }, { shouldRender: false });
   };
 
   prompterRoot.onpointermove = (event) => {
@@ -738,6 +754,8 @@ function escapeHTML(str) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
+
+window.addEventListener('resize', () => syncWrapWidthFromOperatorPreview());
 
 connectSocket();
 render();
